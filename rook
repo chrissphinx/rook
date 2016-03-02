@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+
+path = File.expand_path('~sphinx/rook')
+$: << "#{path}/redis/lib"
+$: << "#{path}/cinch/lib"
+$: << "#{path}/mediawiki_api/lib"
+$: << "#{path}/markovchat"
+
+require 'cinch'
+require 'cinch/plugins/identify'
+require 'cinch/plugins/nest'
+require 'cinch/plugins/bough'
+require 'cinch/plugins/squawk'
+
+bot = Cinch::Bot.new do
+  configure do |c|
+    c.nick     = 'rook'
+    c.user     = 'rook'
+    c.realname = 'the Rook'
+    c.channels = ['#nospace']
+    c.plugins.plugins = [Identify, Nest, Bough, Squawk]
+
+    Dir.chdir(File.dirname(__FILE__))
+    m = Marshal.load(File.open('credfile', 'r'))
+
+    c.plugins.options[Identify] = {
+      password: m[:chat]
+    }
+    c.plugins.options[Nest] = {
+      port: 6373,
+      password: m[:redis]
+    }
+    c.plugins.options[Bough] = {
+      username: 'rook',
+      password: m[:wiki]
+    }
+  end
+end
+
+begin
+  bot.start
+  rescue Interrupt
+    (bot.plugins.find {|p| /Nest/ =~ p.class.name}).shutdown
+    (bot.plugins.find {|p| /Bough/ =~ p.class.name}).logout
+    (bot.plugins.find {|p| /Squawk/ =~ p.class.name}).save
+    bot.quit
+  exit
+end
+
