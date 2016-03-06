@@ -7,12 +7,12 @@ module Cinch
   class UserList < CachedList
     # Finds or creates a user.
     # @overload find_ensured(nick)
-    #   Finds or creates a user based on his nick.
+    #   Finds or creates a user based on their nick.
     #
     #   @param [String] nick The user's nickname
     #   @return [User]
     # @overload find_ensured(user, nick, host)
-    #   Finds or creates a user based on his nick but already
+    #   Finds or creates a user based on their nick but already
     #   setting user and host.
     #
     #   @param [String] user The username
@@ -34,9 +34,16 @@ module Cinch
       else
         raise ArgumentError
       end
+
+      if nick == @bot.nick
+        user_obj = @bot
+      end
+
       downcased_nick = nick.irc_downcase(@bot.irc.isupport["CASEMAPPING"])
       @mutex.synchronize do
-        user_obj = @cache[downcased_nick] ||= User.new(*bargs, @bot)
+        if user_obj.nil?
+          user_obj = @cache[downcased_nick] ||= User.new(*bargs, @bot)
+        end
         if user && host
           # Explicitly set user and host whenever we request a User
           # object to update them on e.g. JOIN.
@@ -52,6 +59,10 @@ module Cinch
     # @param [String] nick nick of a user
     # @return [User, nil]
     def find(nick)
+      if nick == @bot.nick
+        return @bot
+      end
+
       downcased_nick = nick.irc_downcase(@bot.irc.isupport["CASEMAPPING"])
       @mutex.synchronize do
         return @cache[downcased_nick]

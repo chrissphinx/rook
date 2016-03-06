@@ -18,7 +18,7 @@ module Cinch
     # @return [void]
     # @see #safe_notice
     def notice(text)
-      msg(text, true)
+      send(text, true)
     end
 
     # Sends a PRIVMSG to the target.
@@ -27,56 +27,74 @@ module Cinch
     # @param [Boolean] notice Use NOTICE instead of PRIVMSG?
     # @return [void]
     # @see #safe_msg
-    def msg(text, notice = false)
+    # @note The aliases `msg` and `privmsg` are deprecated and will be
+    #   removed in a future version.
+    def send(text, notice = false)
+      # TODO deprecate `notice` argument, put splitting into own
+      # method
       text = text.to_s
       split_start = @bot.config.message_split_start || ""
       split_end   = @bot.config.message_split_end   || ""
       command = notice ? "NOTICE" : "PRIVMSG"
+      prefix = ":#{@bot.mask} #{command} #{@name} :"
 
-      text.split(/\r\n|\r|\n/).each do |line|
-        maxlength = 510 - (":" + " #{command} " + " :").size
-        maxlength = maxlength - @bot.mask.to_s.length - @name.to_s.length
-        maxlength_without_end = maxlength - split_end.bytesize
+      text.lines.map(&:chomp).each do |line|
+        splitted = split_message(line, prefix, split_start, split_end)
 
-        if line.bytesize > maxlength
-          splitted = []
-
-          while line.bytesize > maxlength_without_end
-            pos = line.rindex(/\s/, maxlength_without_end)
-            r = pos || maxlength_without_end
-            splitted << line.slice!(0, r) + split_end.tr(" ", "\u00A0")
-            line = split_start.tr(" ", "\u00A0") + line.lstrip
-          end
-
-          splitted << line
-          splitted[0, (@bot.config.max_messages || splitted.size)].each do |string|
-            string.tr!("\u00A0", " ") # clean string from any non-breaking spaces
-            @bot.irc.send("#{command} #@name :#{string}")
-          end
-        else
-          @bot.irc.send("#{command} #@name :#{line}")
+        splitted[0, (@bot.config.max_messages || splitted.size)].each do |string|
+          @bot.irc.send("#{command} #@name :#{string}")
         end
       end
     end
-    alias_method :send, :msg
-    alias_method :privmsg, :msg
+    alias_method :msg, :send # deprecated
+    alias_method :privmsg, :send # deprecated
+    undef_method(:msg) # yardoc hack
+    undef_method(:privmsg) # yardoc hack
 
-    # Like {#msg}, but remove any non-printable characters from
+    # @deprecated
+    def msg(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Target#msg", "Target#send")
+      send(*args)
+    end
+
+    # @deprecated
+    def privmsg(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Target#privmsg", "Target#send")
+      send(*args)
+    end
+
+    # Like {#send}, but remove any non-printable characters from
     # `text`. The purpose of this method is to send text of untrusted
     # sources, like other users or feeds.
     #
     # Note: this will **break** any mIRC color codes embedded in the
-    # string.
+    # string. For more fine-grained control, use
+    # {Helpers#Sanitize} and
+    # {Formatting.unformat} directly.
     #
-    # @return (see #msg)
-    # @param (see #msg)
-    # @see #msg
-    # @todo Handle mIRC color codes more gracefully.
-    def safe_msg(text, notice = false)
-      msg(Cinch::Utilities::String.filter_string(text), notice)
+    # @return (see #send)
+    # @param (see #send)
+    # @see #send
+    def safe_send(text, notice = false)
+      send(Cinch::Helpers.sanitize(text), notice)
     end
-    alias_method :safe_privmsg, :safe_msg
-    alias_method :safe_send, :safe_msg
+    alias_method :safe_msg, :safe_send # deprecated
+    alias_method :safe_privmsg, :safe_msg # deprecated
+    undef_method(:safe_msg) # yardoc hack
+    undef_method(:safe_privmsg) # yardoc hack
+
+    # @deprecated
+    def safe_msg(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Target#safe_msg", "Target#safe_send")
+      send(*args)
+    end
+
+    # @deprecated
+    def safe_privmsg(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Target#safe_privmsg", "Target#safe_send")
+      send(*args)
+    end
+
 
     # Like {#safe_msg} but for notices.
     #
@@ -84,9 +102,8 @@ module Cinch
     # @param (see #safe_msg)
     # @see #safe_notice
     # @see #notice
-    # @todo (see #safe_msg)
     def safe_notice(text)
-      safe_msg(text, true)
+      safe_send(text, true)
     end
 
     # Invoke an action (/me) in/to the target.
@@ -103,14 +120,15 @@ module Cinch
     # untrusted sources, like other users or feeds.
     #
     # Note: this will **break** any mIRC color codes embedded in the
-    # string.
+    # string. For more fine-grained control, use
+    # {Helpers#Sanitize} and
+    # {Formatting.unformat} directly.
     #
     # @param (see #action)
     # @return (see #action)
     # @see #action
-    # @todo Handle mIRC color codes more gracefully.
     def safe_action(text)
-      action(Cinch::Utilities::String.filter_string(text))
+      action(Cinch::Helpers.Sanitize(text))
     end
 
     # Send a CTCP to the target.
@@ -147,6 +165,34 @@ module Cinch
       else
         nil
       end
+    end
+
+    private
+    def split_message(msg, prefix, split_start, split_end)
+      max_bytesize = 510 - prefix.bytesize
+      max_bytesize_without_end = max_bytesize - split_end.bytesize
+
+      if msg.bytesize <= max_bytesize
+        return [msg]
+      end
+
+      splitted = []
+      while msg.bytesize > max_bytesize_without_end
+        acc = 0
+        acc_rune_sizes = msg.each_char.map {|ch|
+          acc += ch.bytesize
+        }
+
+        max_rune = acc_rune_sizes.rindex {|bs| bs <= max_bytesize_without_end} || 0
+        r = [msg.rindex(/\s/, max_rune) || (max_rune + 1), 1].max
+
+        splitted << (msg[0...r] + split_end)
+        msg = split_start.tr(" ", "\cz") + msg[r..-1].lstrip
+      end
+      splitted << msg
+
+      # clean string from any substitute characters
+      splitted.map {|string| string.tr("\cz", " ")}
     end
   end
 end

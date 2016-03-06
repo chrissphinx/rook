@@ -37,30 +37,32 @@ class Squawk
 
   match /squawk/, method: :squawk
   def squawk m
-    if (@silenced_at != nil && ((Time.now - @silenced_at) / 100).to_i > @anger)
+    if @silenced_at != nil && ((Time.now - @silenced_at) / 100).to_i > @anger
       @silenced = false
       @silenced_at = nil
       @anger = 0
     else
       @anger -= ((Time.now - @last) / 100).to_i
-      if (@anger < 0) then @anger = 0 end
+      if @anger < 0 then @anger = 0 end
     end
 
-    if (@silenced == false && @anger > 3)
+    if @silenced == false && @anger > 3
       m.reply m.user.nick.upcase + ": FUCK OFF, I'M DONE LISTENING TO YOU."
       @silenced = true
       @silenced_at = Time.now
       return
     end
 
-    if (!@silenced)
+    if !@silenced
       n = (m.channel.users.keys.select { |u| u.nick != 'rook' }).sample.nick.upcase
       m.reply @mark.chat % n
       @last = Time.now
       @anger += 1
     end
 
-    puts "@anger: " + @anger.to_s
+    if !@silenced && @anger == 3
+      m.action_reply "is getting fed up!"
+    end
   end
 
   def save

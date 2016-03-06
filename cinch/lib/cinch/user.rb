@@ -59,6 +59,10 @@ module Cinch
       attr(:authname, true, false)
     end
 
+    def away
+      attr(:away, true, false)
+    end
+
     def idle
       attr(:idle, true, false)
     end
@@ -181,7 +185,8 @@ module Cinch
     # @api private
     attr_writer :monitored
 
-
+    # @note Generally, you shouldn't initialize new instances of this
+    #   class. Use {UserList#find_ensured} instead.
     def initialize(*args)
       @data = {
         :user         => nil,
@@ -213,7 +218,7 @@ module Cinch
           @data[:unknown?] = false
           unsync :unknown?
 
-          whois
+          refresh
         end
       }
 
@@ -239,7 +244,9 @@ module Cinch
     # received, the object will be set back to synced.
     #
     # @return [void]
-    def whois
+    # @note The alias `whois` is deprecated and will be removed in a
+    #   future version.
+    def refresh
       return if @in_whois
       @data.keys.each do |attr|
         unsync attr
@@ -252,18 +259,33 @@ module Cinch
         @bot.irc.send "WHOIS #@name #@name"
       end
     end
-    alias_method :refresh, :whois
+    alias_method :whois, :refresh # deprecated
+    undef_method(:whois) # yardoc hack
+
+    # @deprecated
+    def whois
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "User#whois", "User#refresh")
+      refresh
+    end
 
     # @param [Hash, nil] values A hash of values gathered from WHOIS,
     #   or `nil` if no data was returned
-    # @param [Boolean] not_found Has to be true if WHOIS resulted in
-    #   an unknown user
     # @return [void]
     # @api private
     # @since 1.0.1
-    def end_of_whois(values, not_found = false)
+    def end_of_whois(values)
       @in_whois = false
-      if not_found
+      if values.nil?
+        # for some reason, we did not receive user information. one
+        # reason is freenode throttling WHOIS
+        Thread.new do
+          sleep 2
+          refresh
+        end
+        return
+      end
+
+      if values[:unknown?]
         sync(:unknown?, true, true)
         self.online = false
         sync(:idle, 0, true)
@@ -280,21 +302,16 @@ module Cinch
         return
       end
 
-      if values.nil?
-        # for some reason, we did not receive user information. one
-        # reason is freenode throttling WHOIS
-        Thread.new do
-          sleep 2
-          whois
-        end
-        return
+      if values[:registered]
+        values[:authname] ||= self.nick
+        values.delete(:registered)
       end
-
       {
         :authname => nil,
         :idle     => 0,
         :secure?  => false,
         :oper?    => false,
+        :away     => nil,
         :channels => [],
       }.merge(values).each do |attr, value|
         sync(attr, value, true)
@@ -463,7 +480,7 @@ module Cinch
       @last_nick, @name = @name, new_nick
       # Unsync authname because some networks tie authentication to
       # the nick, so the user might not be authenticated anymore after
-      # changing his nick
+      # changing their nick
       unsync(:authname)
       @bot.user_list.update_nick(self)
     end

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 module Cinch
   # The Helpers module contains a number of methods whose purpose is
   # to make writing plugins easier by hiding parts of the API. The
@@ -182,7 +183,48 @@ module Cinch
     def Format(*settings, string)
       Formatting.format(*settings, string)
     end
-    alias_method :Color, :Format
+    alias_method :Color, :Format # deprecated
+    undef_method(:Color) # yardoc hack
+
+    def Color(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Helpers.Color", "Helpers.Format")
+      Format(*args)
+    end
+
+    # (see .sanitize)
+    def Sanitize(string)
+      Cinch::Helpers.sanitize(string)
+    end
+
+    # Deletes all characters in the ranges 0–8, 10–31 as well as the
+    # character 127, that is all non-printable characters and
+    # newlines.
+    #
+    # This method is useful for filtering text from external sources
+    # before sending it to IRC.
+    #
+    # Note that this method does not gracefully handle mIRC color
+    # codes, because it will leave the numeric arguments behind. If
+    # your text comes from IRC, you may want to filter it through
+    # {#Unformat} first. If you want to send sanitized input that
+    # includes your own formatting, first use this method, then add
+    # your formatting.
+    #
+    # There exist methods for sending messages that automatically
+    # call this method, namely {Target#safe_msg},
+    # {Target#safe_notice}, and {Target#safe_action}.
+    #
+    # @param [String] string The string to filter
+    # @return [String] The filtered string
+    # @since 2.2.0
+    def self.sanitize(string)
+      string.gsub(/[\x00-\x08\x10-\x1f\x7f]/, '')
+    end
+
+    # (see Formatting.unformat)
+    def Unformat(string)
+      Formatting.unformat(string)
+    end
 
     # @endgroup
   end

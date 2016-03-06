@@ -43,6 +43,9 @@ module Cinch
     # @return [Hash{String => Object}]
     attr_reader :modes
     synced_attr_reader :modes
+
+    # @note Generally, you shouldn't initialize new instances of this
+    #   class. Use {ChannelList#find_ensured} instead.
     def initialize(name, bot)
       @bot    = bot
       @name   = name
@@ -332,6 +335,21 @@ module Cinch
       @bot.irc.send("KICK #@name #{user} :#{reason}")
     end
 
+    # Removes a user from the channel.
+    #
+    # This uses the REMOVE command, which is a non-standardized
+    # extension. Unlike a kick, it makes a user part. This prevents
+    # auto-rejoin scripts from firing and might also be perceived as
+    # less aggressive by some. Not all IRC networks support this
+    # command.
+    #
+    # @param [User] user the user to remove
+    # @param [String] reason a reason for the removal
+    # @return [void]
+    def remove(user, reason = nil)
+      @bot.irc.send("REMOVE #@name #{user} :#{reason}")
+    end
+
     # Sets or unsets modes. Most of the time you won't need this but
     # use setter methods like {Channel#invite_only=}.
     #
@@ -388,17 +406,34 @@ module Cinch
       @users.clear
     end
 
-    def msg(text, notice = false)
+    # @note The aliases `msg` and `privmsg` are deprecated and will be
+    #   removed in a future version.
+    def send(text, notice = false)
+      # TODO deprecate 'notice' argument
       text = text.to_s
       if @modes["c"]
         # Remove all formatting and colors if the channel doesn't
         # allow colors.
-        text.gsub!(/[\x02\x1F\x16\x0F]|\x03\d{2}(,\d{2})?/, "")
+        text = Cinch::Formatting.unformat(text)
       end
       super(text, notice)
     end
-    alias_method :send, :msg
-    alias_method :privmsg, :msg
+    alias_method :msg, :send # deprecated
+    alias_method :privmsg, :send # deprecated
+    undef_method(:msg) # yardoc hack
+    undef_method(:privmsg) # yardoc hack
+
+    # @deprecated
+    def msg(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Channel#msg", "Channel#send")
+      send(*args)
+    end
+
+    # @deprecated
+    def privmsg(*args)
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Channel#privmsg", "Channel#send")
+      send(*args)
+    end
 
     # @return [Fixnum]
     def hash
@@ -406,10 +441,19 @@ module Cinch
     end
 
     # @return [String]
+    # @note The alias `to_str` is deprecated and will be removed in a
+    #   future version. Channel objects should not be treated like
+    #   strings.
     def to_s
       @name
     end
-    alias_method :to_str, :to_s
+    alias_method :to_str, :to_s # deprecated
+    undef_method(:to_str) # yardoc hack
+
+    def to_str
+      Cinch::Utilities::Deprecation.print_deprecation("2.2.0", "Channel#to_str", "Channel#to_s")
+      to_s
+    end
 
     # @return [String]
     def inspect

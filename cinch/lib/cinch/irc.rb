@@ -210,7 +210,7 @@ module Cinch
     def start
       setup
       if connect
-        @sasl_remaining_methods = [SASL::Plain, SASL::DH_Blowfish]
+        @sasl_remaining_methods = @bot.config.sasl.mechanisms.reverse
         send_cap_ls
         send_login
 
@@ -311,6 +311,11 @@ module Cinch
           new_network = :jtv
           new_ircd    = :jtv
         end
+      when "004"
+        if msg.params == %w{irc.tinyspeck.com IRC-SLACK gateway}
+          new_network = :slack
+          new_ircd = :slack
+        end
       when "005"
         case @isupport["NETWORK"]
         when "NGameTV"
@@ -350,7 +355,7 @@ module Cinch
         msg.channel.bans_unsynced << ban
         events << [:ban, ban]
       else
-        msg.channel.bans_unsynced.delete_if {|b| b.mask == ban.mask}.first
+        msg.channel.bans_unsynced.delete_if {|b| b.mask == ban.mask}
         events << [:unban, ban]
       end
     end
@@ -441,62 +446,81 @@ module Cinch
     # @version 1.1.0
     def on_mode(msg, events)
       if msg.channel?
-        add_and_remove = @bot.irc.isupport["CHANMODES"]["A"] + @bot.irc.isupport["CHANMODES"]["B"] + @bot.irc.isupport["PREFIX"].keys
+        parse_channel_modes(msg, events)
+        return
+      end
+      if msg.params.first == bot.nick
+        parse_bot_modes(msg)
+      end
+    end
 
-        param_modes = {
-          :add    => @bot.irc.isupport["CHANMODES"]["C"] + add_and_remove,
-          :remove => add_and_remove
-        }
+    def parse_channel_modes(msg, events)
+      add_and_remove = @bot.irc.isupport["CHANMODES"]["A"] + @bot.irc.isupport["CHANMODES"]["B"] + @bot.irc.isupport["PREFIX"].keys
 
-        modes = ModeParser.parse_modes(msg.params[1], msg.params[2..-1], param_modes)
-        modes.each do |direction, mode, param|
-          if @bot.irc.isupport["PREFIX"].keys.include?(mode)
-            target = User(param)
+      param_modes = {
+        :add    => @bot.irc.isupport["CHANMODES"]["C"] + add_and_remove,
+        :remove => add_and_remove
+      }
 
-            # (un)set a user-mode
-            if direction == :add
-              msg.channel.users[target] << mode unless msg.channel.users[User(param)].include?(mode)
-            else
-              msg.channel.users[target].delete mode
-            end
 
-            user_events = {
-              "o" => "op",
-              "v" => "voice",
-              "h" => "halfop"
-            }
-            if user_events.has_key?(mode)
-              event = (direction == :add ? "" : "de") + user_events[mode]
-              events << [event.to_sym, target]
-            end
-          elsif @bot.irc.isupport["CHANMODES"]["A"].include?(mode)
-            case mode
-            when "b"
-              process_ban_mode(msg, events, param, direction)
-            when "q"
-              process_owner_mode(msg, events, param, direction) if @network.owner_list_mode
-            else
-              raise Exceptions::UnsupportedMode, mode
-            end
+      modes, err = ModeParser.parse_modes(msg.params[1], msg.params[2..-1], param_modes)
+      if err != nil
+        if  @network.ircd != :slack || !err.is_a?(ModeParser::TooManyParametersError)
+          raise Exceptions::InvalidModeString, err
+        end
+      end
+      modes.each do |direction, mode, param|
+        if @bot.irc.isupport["PREFIX"].keys.include?(mode)
+          target = User(param)
+
+          # (un)set a user-mode
+          if direction == :add
+            msg.channel.users[target] << mode unless msg.channel.users[target].include?(mode)
           else
-            # channel options
-            if direction == :add
-              msg.channel.modes_unsynced[mode] = param.nil? ? true : param
-            else
-              msg.channel.modes_unsynced.delete(mode)
-            end
+            msg.channel.users[target].delete mode
+          end
+
+          user_events = {
+            "o" => "op",
+            "v" => "voice",
+            "h" => "halfop"
+          }
+          if user_events.has_key?(mode)
+            event = (direction == :add ? "" : "de") + user_events[mode]
+            events << [event.to_sym, target]
+          end
+        elsif @bot.irc.isupport["CHANMODES"]["A"].include?(mode)
+          case mode
+          when "b"
+            process_ban_mode(msg, events, param, direction)
+          when "q"
+            process_owner_mode(msg, events, param, direction) if @network.owner_list_mode
+          else
+            raise Exceptions::UnsupportedMode, mode
+          end
+        else
+          # channel options
+          if direction == :add
+            msg.channel.modes_unsynced[mode] = param.nil? ? true : param
+          else
+            msg.channel.modes_unsynced.delete(mode)
           end
         end
+      end
 
-        events << [:mode_change, modes]
-      elsif msg.params.first == bot.nick
-        modes = ModeParser.parse_modes(msg.params[1], msg.params[2..-1])
-        modes.each do |direction, mode, _|
-          if direction == :add
-            @bot.modes << mode unless @bot.modes.include?(mode)
-          else
-            @bot.modes.delete(mode)
-          end
+      events << [:mode_change, modes]
+    end
+
+    def parse_bot_modes(msg)
+      modes, err = ModeParser.parse_modes(msg.params[1], msg.params[2..-1])
+      if err != nil
+        raise Exceptions::InvalidModeString, err
+      end
+      modes.each do |direction, mode, _|
+        if direction == :add
+          @bot.modes << mode unless @bot.modes.include?(mode)
+        else
+          @bot.modes.delete(mode)
         end
       end
     end
@@ -556,7 +580,6 @@ module Cinch
         msg.user.online = true
       end
 
-
       if msg.message =~ /^\001DCC SEND (?:"([^"]+)"|(\S+)) (\S+) (\d+)(?: (\d+))?\001$/
         process_dcc_send($1 || $2, $3, $4, $5, msg, events)
       end
@@ -595,6 +618,11 @@ module Cinch
       detect_network(msg, "002")
     end
 
+    # @since 2.2.6
+    def on_004(msg, events)
+      detect_network(msg, "004")
+    end
+
     def on_005(msg, events)
       # ISUPPORT
       @isupport.parse(*msg.params[1..-2].map {|v| v.split(" ")}.flatten)
@@ -604,8 +632,8 @@ module Cinch
     # @since 2.0.0
     def on_301(msg, events)
       # RPL_AWAY
-      user = User(msg.params.first)
-      away = msg.message
+      user = User(msg.params[1])
+      away = msg.params.last
 
       if @whois_updates[user]
         update_whois(user, {:away => away})
@@ -616,7 +644,7 @@ module Cinch
     def on_307(msg, events)
       # RPL_WHOISREGNICK
       user = User(msg.params[1])
-      update_whois(user, {:authname => user.nick})
+      update_whois(user, {:registered => true})
     end
 
     def on_311(msg, events)
@@ -632,7 +660,7 @@ module Cinch
     def on_313(msg, events)
       # RPL_WHOISOPERATOR
       user = User(msg.params[1])
-      @whois_updates[user].merge!({:oper? => true})
+      update_whois(user, {:oper? => true})
     end
 
     def on_317(msg, events)
@@ -647,22 +675,15 @@ module Cinch
     def on_318(msg, events)
       # RPL_ENDOFWHOIS
       user = User(msg.params[1])
-
-      if @whois_updates[user]
-        if @whois_updates[user].empty? && !user.attr(:unknown?, true, true)
-          user.end_of_whois(nil)
-        else
-          user.end_of_whois(@whois_updates[user])
-        end
-        @whois_updates.delete user
-      end
+      user.end_of_whois(@whois_updates[user])
+      @whois_updates.delete user
     end
 
     def on_319(msg, events)
       # RPL_WHOISCHANNELS
       user     = User(msg.params[1])
       channels = msg.params[2].scan(/[#{@isupport["CHANTYPES"].join}][^ ]+/o).map {|c| Channel(c) }
-      @whois_updates[user].merge!({:channels => channels})
+      update_whois(user, {:channels => channels})
     end
 
     def on_324(msg, events)
@@ -685,8 +706,7 @@ module Cinch
       # RPL_WHOISACCOUNT
       user     = User(msg.params[1])
       authname = msg.params[2]
-
-      @whois_updates[user].merge!({:authname => authname})
+      update_whois(user, {:authname => authname})
     end
 
     def on_331(msg, events)
@@ -829,8 +849,7 @@ module Cinch
     def on_401(msg, events)
       # ERR_NOSUCHNICK
       if user = @bot.user_list.find(msg.params[1])
-        user.end_of_whois(nil, true)
-        @whois_updates.delete user
+        update_whois(user, {:unknown? => true})
       end
     end
 
@@ -838,7 +857,7 @@ module Cinch
       # ERR_NOSUCHSERVER
 
       if user = @bot.user_list.find(msg.params[1]) # not _ensured, we only want a user that already exists
-        user.end_of_whois(nil, true)
+        user.end_of_whois({:unknown? => true})
         @whois_updates.delete user
         # TODO freenode specific, test on other IRCd
       end
@@ -851,7 +870,7 @@ module Cinch
 
     def on_671(msg, events)
       user = User(msg.params[1])
-      @whois_updates[user].merge!({:secure? => true})
+      update_whois(user, {:secure? => true})
     end
 
     # @since 2.0.0
