@@ -2,13 +2,14 @@ require 'redis'
 
 class Nest
   include Cinch::Plugin
+  hook :pre, :for => [:match], :method => lambda {|m| m.user.nick != "fish"}
 
   def initialize *args
     super
     @redis = Redis.new port: config[:port], password: config[:password]
   end
   set :prefix, /^@/
-  set :suffix, /$/
+  set :suffix, /\z/
 
   match /set ([a-z][a-zA-Z0-9_]+)\s(.+)/, method: :set
   def set m, k, v
@@ -30,7 +31,7 @@ class Nest
     m.reply @redis.keys().join(", ")
   end
 
-  match /del ([^\z]+)/, method: :del
+  match /del (.+)/, method: :del
   def del m, ks
     m.reply @redis.del(*ks.split(" "))
   end
